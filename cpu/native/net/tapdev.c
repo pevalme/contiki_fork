@@ -41,6 +41,7 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <signal.h>
 #include <unistd.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -49,6 +50,7 @@
 #include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/socket.h>
+#include <syslog.h>
 
 #ifdef linux
 #include <sys/ioctl.h>
@@ -62,6 +64,7 @@
 #include "contiki-net.h"
 #include "tapdev.h"
 
+
 #define DROP 0
 
 #if DROP
@@ -72,9 +75,11 @@ static int fd;
 
 static unsigned long lasttime;
 
+static int flag = 0;
+
 #define BUF ((struct uip_eth_hdr *)&uip_buf[0])
 
-#define DEBUG 0
+#define DEBUG 1
 #if DEBUG
 #define PRINTF(...) fprintf(stderr, __VA_ARGS__)
 #else
@@ -103,7 +108,7 @@ void
 tapdev_init(void)
 {
   char buf[1024];
-  
+
   fd = open(DEVTAP, O_RDWR);
   if(fd == -1) {
     perror("tapdev: tapdev_init: open");
@@ -132,7 +137,7 @@ tapdev_init(void)
   /* route add for freebsd */
   snprintf(buf, sizeof(buf), "route add -net 172.18.0.0/16 -iface tap0");
 #endif /* linux */
-  
+
   system(buf);
   fprintf(stderr, "%s\n", buf);
   atexit(remove_route);
@@ -144,40 +149,51 @@ uint16_t
 tapdev_poll(void)
 {
   fd_set fdset;
+  FILE *input;
   struct timeval tv;
   int ret;
-  
+
+  /*
+  If the input is parsed correctly but not accepted by the example
+  the we must force contiki to stop
+  */
+  if (flag == 1)
+    raise(SIGINT);
+
   tv.tv_sec = 0;
   tv.tv_usec = 0;
-  
+
   FD_ZERO(&fdset);
   if(fd > 0) {
     FD_SET(fd, &fdset);
   }
 
-  ret = select(fd + 1, &fdset, NULL, NULL, &tv);
+  input = fopen("input.bin","rb");
 
-  if(ret == 0) {
-    return 0;
-  }
+  fd = fileno(input);
+
   ret = read(fd, uip_buf, UIP_BUFSIZE);
-  PRINTF("tapdev_poll: read %d bytes\n", ret);
+
+  PRINTF("\ntapdev_poll: read %d bytes: \n", ret);
 
   if(ret == -1) {
     perror("tapdev_poll: read");
   }
+
+  flag = 1;
+
   return ret;
 }
 /*---------------------------------------------------------------------------*/
 void
 tapdev_send(void)
 {
-  int ret;
+  int ret,i;
 
   if(fd <= 0) {
     return;
   }
- 
+
   /*  printf("tapdev_send: sending %d bytes\n", size);*/
   /*  check_checksum(uip_buf, size);*/
 
@@ -189,7 +205,10 @@ tapdev_send(void)
   }
 #endif /* DROP */
 
-  PRINTF("tapdev_send: sending %d bytes\n", uip_len);
+  PRINTF("\ntapdev_send: sending %d bytes\n", uip_len);
+  for (i = 0; i < uip_len; i++)
+    PRINTF("%d,",uip_buf[i]);
+
   ret = write(fd, uip_buf, uip_len);
 
   if(ret == -1) {
